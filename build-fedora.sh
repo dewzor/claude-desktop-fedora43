@@ -133,15 +133,17 @@ if ! curl --fail -L --retry 3 \
     exit 1
 fi
 
-# Verify we downloaded an actual executable
+# Verify we downloaded an actual executable, not an error page
 if ! file "$CLAUDE_EXE" | grep -q "PE32\|executable"; then
     echo "❌ Downloaded file is not a valid Windows executable"
     echo "   File type: $(file "$CLAUDE_EXE")"
     echo "   This usually means Cloudflare blocked the download."
-    echo "   Manual download: https://claude.ai/download"
-    rm -f "$CLAUDE_EXE"
+    echo ""
+    echo "   Workaround: Manually download the installer from https://claude.ai/download"
+    echo "   Then update CLAUDE_DOWNLOAD_URL in this script to point to your local file."
     exit 1
 fi
+
 echo "✓ Download complete"
 
 # Extract
