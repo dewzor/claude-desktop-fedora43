@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
-# Update this URL when a new version of Claude Desktop is released
-CLAUDE_DOWNLOAD_URL="https://storage.googleapis.com/osprey-downloads-c02f6a0d-347c-492b-a752-3e0651722e97/nest-win-x64/Claude-Setup-x64.exe"
+# Official Claude Desktop download URL (automatically redirects to latest version)
+# This URL always points to the most recent Windows installer
+CLAUDE_DOWNLOAD_URL="https://claude.ai/api/desktop/win32/x64/exe/latest/redirect"
 
 # Inclusive check for Fedora-based system
 is_fedora_based() {

@@ -29,6 +29,7 @@ Supports the Tray menu! (Screenshot of running on KDE)
 For Fedora-based distributions you can build and install Claude Desktop using the provided build script.
 
 **✨ What's New:**
+- **Auto-downloads latest version** - No need to manually update URLs
 - **Native title bar support** - No more double title bar issue!
 - **Fedora 42+ GTK compatibility** - Automatic environment configuration
 - **Improved launcher** - Proper X11/GTK settings out of the box
@@ -132,9 +133,17 @@ The build script (`build-fedora.sh`) handles the entire process:
    - Proper dependency management
    - Post-install configuration
 
-## Updating the Build Script
+## Automatic Updates
 
-When a new version of Claude Desktop is released, simply update the `CLAUDE_DOWNLOAD_URL` constant at the top of `build-deb.sh` to point to the new installer. The script will handle everything else automatically.
+The build script automatically downloads the latest version of Claude Desktop from the official Anthropic servers using their redirect API:
+
+```bash
+CLAUDE_DOWNLOAD_URL="https://claude.ai/api/desktop/win32/x64/exe/latest/redirect"
+```
+
+This URL always redirects to the most recent release, so you don't need to manually update version numbers.
+
+**Manual Version Override:** If you need to build a specific version (for testing or compatibility), you can edit the `CLAUDE_DOWNLOAD_URL` at the top of `build-fedora.sh` to point to a specific installer URL.
 
 # License
 
