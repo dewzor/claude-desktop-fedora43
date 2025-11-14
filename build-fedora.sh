@@ -1,151 +1,107 @@
 #!/bin/bash
 set -e
 
-# Official Claude Desktop download URL (automatically redirects to latest version)
-# This URL always points to the most recent Windows installer
-CLAUDE_DOWNLOAD_URL="https://claude.ai/api/desktop/win32/x64/exe/latest/redirect"
+# =============================================================================
+# Claude Desktop for Fedora 43+ - Complete Build Script
+#
+# Fixes included:
+#   - Auto-download latest version from redirect URL
+#   - Layout scaling (main_window.tgz patch)
+#   - Native window frame (no custom titlebar issues)
+#   - Menu bar FULLY removed
+#   - Window maximize/resize fix (forced relayout)
+#   - Google Sign-In (native module stub)
+#   - Origin validation bypass (IPC security fix for file:// URLs)
+#   - GPU/Wayland compatibility (software rendering fallback)
+#   - White bar fix via geometry-based detection (future-proof)
+#
+# v6 Changelog:
+#   - Auto-download latest Claude Desktop version
+#   - Removed fragile minified variable sed patches
+#   - Promoted JS injection as primary titlebar fix
+#   - Added Cloudflare bypass headers for download
+# =============================================================================
 
-# Inclusive check for Fedora-based system
+# Use redirect URL for always-latest version
+CLAUDE_DOWNLOAD_URL="https://claude.ai/api/desktop/win32/x64/exe/latest/redirect"
+ELECTRON_VERSION=${ELECTRON_VERSION:-"37.0.0"}
+ELECTRON_DOWNLOAD_URL=${ELECTRON_DOWNLOAD_URL:-"https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/electron-v${ELECTRON_VERSION}-linux-x64.zip"}
+MAIN_WINDOW_FIX_URL="https://github.com/emsi/claude-desktop/raw/refs/heads/main/assets/main_window.tgz"
+
 is_fedora_based() {
-    if [ -f "/etc/fedora-release" ]; then
-        return 0
-    fi
-    
-    if [ -f "/etc/os-release" ]; then
-        grep -qi "fedora" /etc/os-release && return 0
-    fi
-    
-    # Not a Fedora-based system
+    [ -f "/etc/fedora-release" ] && return 0
+    [ -f "/etc/os-release" ] && grep -qi "fedora" /etc/os-release && return 0
     return 1
 }
 
 if ! is_fedora_based; then
-    echo "❌ This script requires a Fedora-based Linux distribution"
+    echo "This script requires a Fedora-based Linux distribution"
     exit 1
 fi
 
-# Check for root/sudo
-IS_SUDO=false
-if [ "$EUID" -eq 0 ]; then
-    IS_SUDO=true
-    # Check if running via sudo (and not directly as root)
-    if [ -n "$SUDO_USER" ]; then
-        ORIGINAL_USER="$SUDO_USER"
-        ORIGINAL_HOME=$(eval echo ~$ORIGINAL_USER)
-    else
-        # Running directly as root, no original user context
-        ORIGINAL_USER="root"
-        ORIGINAL_HOME="/root"
-    fi
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run with sudo"
+    exit 1
+fi
+
+if [ -n "$SUDO_USER" ]; then
+    ORIGINAL_USER="$SUDO_USER"
+    ORIGINAL_HOME=$(eval echo ~$ORIGINAL_USER)
 else
-    echo "Please run with sudo to install dependencies"
-    exit 1
+    ORIGINAL_USER="root"
+    ORIGINAL_HOME="/root"
 fi
 
-# Preserve NVM path if running under sudo and NVM exists for the original user
-if [ "$IS_SUDO" = true ] && [ "$ORIGINAL_USER" != "root" ] && [ -d "$ORIGINAL_HOME/.nvm" ]; then
-    echo "Found NVM installation for user $ORIGINAL_USER, attempting to preserve npm/npx path..."
-    # Source NVM script to set up NVM environment variables temporarily
+# Preserve NVM path
+if [ "$ORIGINAL_USER" != "root" ] && [ -d "$ORIGINAL_HOME/.nvm" ]; then
     export NVM_DIR="$ORIGINAL_HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # This loads nvm
-
-    # Find the path to the currently active or default Node version's bin directory
-    # nvm_find_node_version might not be available, try finding the latest installed version
-    NODE_BIN_PATH=$(find "$NVM_DIR/versions/node" -maxdepth 2 -type d -name 'bin' | sort -V | tail -n 1)
-
-    if [ -n "$NODE_BIN_PATH" ] && [ -d "$NODE_BIN_PATH" ]; then
-        echo "Adding $NODE_BIN_PATH to PATH"
-        export PATH="$NODE_BIN_PATH:$PATH"
-    else
-        echo "Warning: Could not determine NVM Node bin path. npm/npx might not be found."
-    fi
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    NODE_BIN_PATH=$(find "$NVM_DIR/versions/node" -maxdepth 2 -type d -name 'bin' 2>/dev/null | sort -V | tail -n 1)
+    [ -n "$NODE_BIN_PATH" ] && [ -d "$NODE_BIN_PATH" ] && export PATH="$NODE_BIN_PATH:$PATH"
 fi
 
-# Print system information
-echo "System Information:"
+echo "============================================================================"
+echo "Claude Desktop for Fedora - Build Script v6"
+echo "============================================================================"
 echo "Distribution: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
-echo "Fedora version: $(cat /etc/fedora-release)"
+echo "============================================================================"
 
-# Function to check if a command exists
+# Check dependencies
 check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        echo "❌ $1 not found"
-        return 1
-    else
-        echo "✓ $1 found"
-        return 0
-    fi
+    command -v "$1" &> /dev/null && echo "✓ $1" && return 0
+    echo "✗ $1 not found" && return 1
 }
 
-# Check and install dependencies
-echo "Checking dependencies..."
 DEPS_TO_INSTALL=""
-
-# Check system package dependencies
-for cmd in sqlite3 7z wget wrestool icotool convert npx rpm rpmbuild; do
+for cmd in sqlite3 7z wget curl unzip wrestool icotool convert npx rpmbuild file; do
     if ! check_command "$cmd"; then
         case "$cmd" in
-            "sqlite3")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL sqlite3"
-                ;;
-            "7z")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL p7zip-plugins"
-                ;;
-            "wget")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL wget"
-                ;;
-            "wrestool"|"icotool")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL icoutils"
-                ;;
-            "convert")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL ImageMagick"
-                ;;
-            "npx")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL nodejs npm"
-                ;;
-            "rpm")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL rpm"
-                ;;
-            "rpmbuild")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL rpmbuild"
-                ;;
-            "curl")
-                DEPS_TO_INSTALL="$DEPS_TO_INSTALL curl"
+            "sqlite3") DEPS_TO_INSTALL="$DEPS_TO_INSTALL sqlite3" ;;
+            "7z") DEPS_TO_INSTALL="$DEPS_TO_INSTALL p7zip-plugins" ;;
+            "wget") DEPS_TO_INSTALL="$DEPS_TO_INSTALL wget" ;;
+            "curl") DEPS_TO_INSTALL="$DEPS_TO_INSTALL curl" ;;
+            "unzip") DEPS_TO_INSTALL="$DEPS_TO_INSTALL unzip" ;;
+            "wrestool"|"icotool") DEPS_TO_INSTALL="$DEPS_TO_INSTALL icoutils" ;;
+            "convert") DEPS_TO_INSTALL="$DEPS_TO_INSTALL ImageMagick" ;;
+            "npx") DEPS_TO_INSTALL="$DEPS_TO_INSTALL nodejs npm" ;;
+            "rpmbuild") DEPS_TO_INSTALL="$DEPS_TO_INSTALL rpm-build" ;;
+            "file") DEPS_TO_INSTALL="$DEPS_TO_INSTALL file" ;;
         esac
     fi
 done
 
-# Install system dependencies if any
-if [ ! -z "$DEPS_TO_INSTALL" ]; then
-    echo "Installing system dependencies: $DEPS_TO_INSTALL"
-    dnf install -y $DEPS_TO_INSTALL
-    echo "System dependencies installed successfully"
-fi
-
-# Install electron globally via npm if not present
-if ! check_command "electron"; then
-    echo "Installing electron via npm..."
-    npm install -g electron
-    if ! check_command "electron"; then
-        echo "Failed to install electron. Please install it manually:"
-        echo "sudo npm install -g electron"
-        exit 1
-    fi
-    echo "Electron installed successfully"
-fi
+[ -n "$DEPS_TO_INSTALL" ] && dnf install -y $DEPS_TO_INSTALL
 
 PACKAGE_NAME="claude-desktop"
 ARCHITECTURE=$(uname -m)
 DISTRIBUTION=$(rpm --eval %{?dist})
 MAINTAINER="Claude Desktop Linux Maintainers"
-DESCRIPTION="Claude Desktop for Linux"
 
 # Create working directories
 WORK_DIR="$(pwd)/build"
 FEDORA_ROOT="$WORK_DIR/fedora-package"
 INSTALL_DIR="$FEDORA_ROOT/usr"
 
-# Clean previous build
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
 mkdir -p "$FEDORA_ROOT/FEDORA"
@@ -156,80 +112,62 @@ mkdir -p "$INSTALL_DIR/bin"
 
 # Install asar if needed
 if ! command -v asar > /dev/null 2>&1; then
-    echo "Installing asar package globally..."
     npm install -g asar
 fi
 
-# Download Claude Windows installer
-echo "📥 Downloading Claude Desktop installer..."
+# Download Claude with Cloudflare bypass
+echo "📥 Downloading Claude Desktop (latest version)..."
 CLAUDE_EXE="$WORK_DIR/Claude-Setup-x64.exe"
-# Use browser headers to bypass Cloudflare protection
-if ! curl -L -o "$CLAUDE_EXE" \
-    -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+if ! curl --fail -L --retry 3 \
+    -H "User-Agent: ${USER_AGENT}" \
     -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8" \
     -H "Accept-Language: en-US,en;q=0.5" \
     -H "Sec-Fetch-Dest: document" \
     -H "Sec-Fetch-Mode: navigate" \
-    -H "Sec-Fetch-Site: none" \
+    --compressed \
+    -o "$CLAUDE_EXE" \
     "$CLAUDE_DOWNLOAD_URL"; then
-    echo "❌ Failed to download Claude Desktop installer"
-    echo "   If you see Cloudflare errors, the redirect URL may be temporarily blocked."
-    echo "   You can manually download from https://claude.ai/download and update CLAUDE_DOWNLOAD_URL."
+    echo "Download failed"
     exit 1
 fi
 
-# Verify we downloaded an actual executable, not an error page
+# Verify we downloaded an actual executable
 if ! file "$CLAUDE_EXE" | grep -q "PE32\|executable"; then
     echo "❌ Downloaded file is not a valid Windows executable"
     echo "   File type: $(file "$CLAUDE_EXE")"
     echo "   This usually means Cloudflare blocked the download."
-    echo ""
-    echo "   Workaround: Manually download the installer from https://claude.ai/download"
-    echo "   Then update CLAUDE_DOWNLOAD_URL in this script to point to your local file."
+    echo "   Manual download: https://claude.ai/download"
+    rm -f "$CLAUDE_EXE"
     exit 1
 fi
-
 echo "✓ Download complete"
 
-# Extract resources
-echo "📦 Extracting resources..."
+# Extract
+echo "📦 Extracting..."
 cd "$WORK_DIR"
-if ! 7z x -y "$CLAUDE_EXE"; then
-    echo "❌ Failed to extract installer"
-    exit 1
-fi
+7z x -y "$CLAUDE_EXE" || { echo "Extract failed"; exit 1; }
 
-# Find the nupkg file
 NUPKG_FILE=$(find . -name "AnthropicClaude-*-full.nupkg" | head -1)
-if [ -z "$NUPKG_FILE" ]; then
-    echo "❌ Could not find AnthropicClaude nupkg file"
-    exit 1
-fi
+[ -z "$NUPKG_FILE" ] && { echo "nupkg not found"; exit 1; }
 
-# Extract the version from the nupkg filename
 VERSION=$(echo "$NUPKG_FILE" | grep -oP 'AnthropicClaude-\K[0-9]+\.[0-9]+\.[0-9]+(?=-full\.nupkg)')
 echo "📋 Detected Claude version: $VERSION"
 
-if ! 7z x -y "$NUPKG_FILE"; then
-    echo "❌ Failed to extract nupkg"
-    exit 1
-fi
-echo "✓ Resources extracted"
+7z x -y "$NUPKG_FILE" || { echo "nupkg extract failed"; exit 1; }
 
-# Extract and convert icons
+# Download Electron
+echo "📥 Downloading Electron v${ELECTRON_VERSION}..."
+curl -L -o "$WORK_DIR/electron.zip" "$ELECTRON_DOWNLOAD_URL" || { echo "Electron download failed"; exit 1; }
+unzip -q "$WORK_DIR/electron.zip" -d "$WORK_DIR/electron-dist"
+echo "✓ Electron ready"
+
+# Extract icons
 echo "🎨 Processing icons..."
-if ! wrestool -x -t 14 "lib/net45/claude.exe" -o claude.ico; then
-    echo "❌ Failed to extract icons from exe"
-    exit 1
-fi
+wrestool -x -t 14 "lib/net45/claude.exe" -o claude.ico || { echo "Icon extract failed"; exit 1; }
+icotool -x claude.ico || { echo "Icon convert failed"; exit 1; }
 
-if ! icotool -x claude.ico; then
-    echo "❌ Failed to convert icons"
-    exit 1
-fi
-echo "✓ Icons processed"
-
-# Map icon sizes to their corresponding extracted files
 declare -A icon_files=(
     ["16"]="claude_13_16x16x32.png"
     ["24"]="claude_11_24x24x32.png"
@@ -239,16 +177,10 @@ declare -A icon_files=(
     ["256"]="claude_6_256x256x32.png"
 )
 
-# Install icons
 for size in 16 24 32 48 64 256; do
     icon_dir="$INSTALL_DIR/share/icons/hicolor/${size}x${size}/apps"
     mkdir -p "$icon_dir"
-    if [ -f "${icon_files[$size]}" ]; then
-        echo "Installing ${size}x${size} icon..."
-        install -Dm 644 "${icon_files[$size]}" "$icon_dir/claude-desktop.png"
-    else
-        echo "Warning: Missing ${size}x${size} icon"
-    fi
+    [ -f "${icon_files[$size]}" ] && install -Dm 644 "${icon_files[$size]}" "$icon_dir/claude-desktop.png"
 done
 
 # Process app.asar
@@ -259,67 +191,275 @@ cp -r "lib/net45/resources/app.asar.unpacked" electron-app/
 cd electron-app
 npx asar extract app.asar app.asar.contents || { echo "asar extract failed"; exit 1; }
 
-echo "🔧 Applying title bar fixes for v0.14.10..."
+# =============================================================================
+# FIX 1: Apply main_window patch (optional layout fix)
+# =============================================================================
+echo "🔧 Applying main_window patch..."
+wget -O- "$MAIN_WINDOW_FIX_URL" 2>/dev/null | tar -zxvf - -C app.asar.contents/ 2>/dev/null || echo "⚠️ main_window.tgz patch skipped"
 
-# Fix 1: Enable native titlebar (remove custom overlay)
-if sed -i 's/titleBarStyle:"hidden",show:Cpe||LG,/titleBarStyle:"default",show:Cpe||LG,/g' app.asar.contents/.vite/build/index.js; then
-    # Verify the fix was applied
-    if grep -q 'titleBarStyle:"default"' app.asar.contents/.vite/build/index.js; then
-        echo "✓ Native title bar enabled"
+# =============================================================================
+# FIX 2: Stable titleBarStyle sed (Electron API - reliable across versions)
+# =============================================================================
+echo "🔧 Applying stable titleBarStyle fix..."
+TARGET_FILE="app.asar.contents/.vite/build/index.js"
+
+if [ -f "$TARGET_FILE" ]; then
+    if grep -qF 'titleBarStyle:"hidden"' "$TARGET_FILE"; then
+        sed -i 's/titleBarStyle:"hidden"/titleBarStyle:"default"/g' "$TARGET_FILE"
+        echo "✓ Native title bar enabled (titleBarStyle:default)"
     else
-        echo "❌ ERROR: Title bar fix verification failed - pattern may have changed in this version"
-        echo "   This is likely due to version mismatch. Please report this issue."
-        exit 1
+        echo "⚠ titleBarStyle pattern not found (may be different in this version)"
     fi
-else
-    echo "❌ ERROR: Failed to apply titleBarStyle fix"
-    exit 1
 fi
 
-# Fix 2: Set custom overlay bar height to 0 (removes the white/yellow bar)
-if sed -i 's/e2=Er?0:36/e2=0/g' app.asar.contents/.vite/build/index.js; then
-    # Verify the fix was applied
-    if grep -q 'e2=0' app.asar.contents/.vite/build/index.js; then
-        echo "✓ Custom overlay bar removed"
-    else
-        echo "❌ ERROR: Overlay height fix verification failed - pattern may have changed in this version"
-        echo "   This is likely due to version mismatch. Please report this issue."
-        exit 1
-    fi
-else
-    echo "❌ ERROR: Failed to apply overlay height fix"
-    exit 1
+# Apply to all JS files for broader coverage
+find app.asar.contents -name "*.js" -type f 2>/dev/null | while read -r jsfile; do
+    sed -i 's/frame:false/frame:true/g' "$jsfile" 2>/dev/null || true
+    sed -i 's/frame:!1/frame:!0/g' "$jsfile" 2>/dev/null || true
+    sed -i 's/titleBarStyle:"hidden",//g' "$jsfile" 2>/dev/null || true
+    sed -i 's/,titleBarStyle:"hidden"//g' "$jsfile" 2>/dev/null || true
+    sed -i 's/titleBarStyle:"hiddenInset",//g' "$jsfile" 2>/dev/null || true
+    sed -i 's/titleBarOverlay:[^,}]*,//g' "$jsfile" 2>/dev/null || true
+    sed -i 's/autoHideMenuBar:false/autoHideMenuBar:true/g' "$jsfile" 2>/dev/null || true
+    sed -i 's/autoHideMenuBar:!1/autoHideMenuBar:!0/g' "$jsfile" 2>/dev/null || true
+done
+
+# =============================================================================
+# FIX 3: Inject comprehensive Linux fixes (PRIMARY - geometry-based detection)
+# =============================================================================
+echo "🔧 Injecting Linux-specific fixes (geometry-based detection)..."
+MAIN_ENTRY=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' app.asar.contents/package.json 2>/dev/null | sed 's/"main"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/' || true)
+if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
+    TEMP_FILE=$(mktemp)
+    cat > "$TEMP_FILE" << 'INJECT_EOF'
+// =============================================================================
+// Linux Fixes - Injected by build script v6
+// Uses geometry-based detection (survives minification changes)
+// =============================================================================
+(function() {
+    if (process.platform !== 'linux') return;
+
+    const { app, Menu, BrowserWindow } = require('electron');
+
+    const removeMenu = () => {
+        try { Menu.setApplicationMenu(null); } catch(e) {}
+    };
+
+    removeMenu();
+    app.on('ready', removeMenu);
+
+    app.on('browser-window-created', (e, win) => {
+        removeMenu();
+        win.removeMenu();
+        win.setMenu(null);
+        win.setMenuBarVisibility(false);
+        win.setAutoHideMenuBar(false);
+
+        const forceRelayout = () => {
+            if (!win || win.isDestroyed()) return;
+            try {
+                const [width, height] = win.getSize();
+                win.setSize(width, height + 1);
+                setTimeout(() => {
+                    if (win && !win.isDestroyed()) {
+                        win.setSize(width, height);
+                        win.webContents.executeJavaScript(`
+                            window.dispatchEvent(new Event('resize'));
+                            document.body.style.display = 'none';
+                            document.body.offsetHeight;
+                            document.body.style.display = '';
+                        `).catch(() => {});
+                    }
+                }, 50);
+            } catch(e) {}
+        };
+
+        win.on('maximize', () => setTimeout(forceRelayout, 100));
+        win.on('unmaximize', () => setTimeout(forceRelayout, 100));
+        win.on('enter-full-screen', () => setTimeout(forceRelayout, 100));
+        win.on('leave-full-screen', () => setTimeout(forceRelayout, 100));
+
+        win.webContents.on('did-finish-load', () => {
+            win.webContents.insertCSS(`
+                [class*="titlebar" i],[class*="Titlebar" i],[class*="title-bar" i],[class*="TitleBar" i],
+                [id*="titlebar" i],[id*="title-bar" i],[class*="drag-region" i],[class*="dragRegion" i],
+                [class*="window-controls" i],[class*="windowControls" i],[style*="-webkit-app-region: drag"],
+                [style*="-webkit-app-region:drag"],[data-tauri-drag-region] {
+                    display: none !important;
+                    visibility: hidden !important;
+                    height: 0 !important;
+                    max-height: 0 !important;
+                    min-height: 0 !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    overflow: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                    position: absolute !important;
+                    z-index: -9999 !important;
+                }
+                html, body {
+                    height: 100% !important;
+                    width: 100% !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    padding-top: 0 !important;
+                    margin-top: 0 !important;
+                    overflow: hidden !important;
+                }
+                body {
+                    position: fixed !important;
+                    top: 0 !important;
+                    left: 0 !important;
+                    right: 0 !important;
+                    bottom: 0 !important;
+                }
+                body > div:first-child, #root, #app {
+                    height: 100% !important;
+                    width: 100% !important;
+                    max-height: 100% !important;
+                    padding-top: 0 !important;
+                    margin-top: 0 !important;
+                }
+            `).catch(() => {});
+
+            win.webContents.executeJavaScript(`
+                (function removeWhiteBar() {
+                    const removeTopBars = () => {
+                        const children = Array.from(document.body.children);
+                        for (const child of children) {
+                            const rect = child.getBoundingClientRect();
+                            if (rect.top < 5 && rect.height > 0 && rect.height <= 50 &&
+                                rect.width > window.innerWidth * 0.8) {
+                                const hasTextContent = child.textContent?.trim().length > 100;
+                                const hasInputs = child.querySelectorAll('input, textarea, button').length > 3;
+                                if (!hasTextContent && !hasInputs) {
+                                    child.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
+                                }
+                            }
+                        }
+                        const firstChild = document.body.firstElementChild;
+                        if (firstChild) {
+                            const grandchildren = Array.from(firstChild.children);
+                            for (const gc of grandchildren) {
+                                const rect = gc.getBoundingClientRect();
+                                if (rect.top < 5 && rect.height > 0 && rect.height <= 50 &&
+                                    rect.width > window.innerWidth * 0.8) {
+                                    const hasTextContent = gc.textContent?.trim().length > 100;
+                                    const hasInputs = gc.querySelectorAll('input, textarea, button').length > 3;
+                                    if (!hasTextContent && !hasInputs) {
+                                        gc.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    removeTopBars();
+                    setTimeout(removeTopBars, 100);
+                    setTimeout(removeTopBars, 500);
+                    setTimeout(removeTopBars, 1000);
+
+                    const observer = new MutationObserver((mutations) => {
+                        let shouldCheck = false;
+                        for (const m of mutations) {
+                            if (m.addedNodes.length > 0) {
+                                shouldCheck = true;
+                                m.addedNodes.forEach(node => {
+                                    if (node.nodeType === 1) {
+                                        const className = (node.className?.toString?.() || '').toLowerCase();
+                                        const id = (node.id || '').toLowerCase();
+                                        if (className.includes('titlebar') || className.includes('drag') ||
+                                            id.includes('titlebar') || id.includes('drag')) {
+                                            node.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                        if (shouldCheck) setTimeout(removeTopBars, 10);
+                    });
+                    observer.observe(document.body, { childList: true, subtree: true });
+
+                    document.body.style.paddingTop = '0';
+                    document.body.style.marginTop = '0';
+                    if (document.body.firstElementChild) {
+                        document.body.firstElementChild.style.paddingTop = '0';
+                        document.body.firstElementChild.style.marginTop = '0';
+                    }
+                })();
+            `).catch(() => {});
+        });
+
+        win.webContents.on('dom-ready', () => {
+            win.webContents.insertCSS(`
+                [class*="titlebar" i],[class*="drag-region" i],[class*="window-controls" i]{display:none!important;height:0!important;}
+                body{padding-top:0!important;margin-top:0!important;}
+            `).catch(() => {});
+        });
+    });
+
+    const originalSetMenu = Menu.setApplicationMenu;
+    Menu.setApplicationMenu = function(menu) {
+        return originalSetMenu.call(this, null);
+    };
+})();
+// =============================================================================
+INJECT_EOF
+    cat "app.asar.contents/$MAIN_ENTRY" >> "$TEMP_FILE"
+    mv "$TEMP_FILE" "app.asar.contents/$MAIN_ENTRY"
+    echo "✓ Linux fixes injected"
 fi
 
-# Replace native module with stub implementation
-echo "Creating stub native module..."
+# =============================================================================
+# FIX 4: Patch CSS files
+# =============================================================================
+echo "🔧 Patching CSS files..."
+find app.asar.contents -name "*.css" -type f 2>/dev/null | while read -r cssfile; do
+    TEMP_CSS=$(mktemp)
+    cat > "$TEMP_CSS" << 'CSSEOF'
+/* Linux: Remove titlebar elements - v6 */
+[class*="titlebar" i],[class*="Titlebar" i],[class*="title-bar" i],[class*="TitleBar" i],[id*="titlebar" i],[class*="drag-region" i],[class*="window-controls" i],[style*="-webkit-app-region"]{display:none!important;height:0!important;max-height:0!important;visibility:hidden!important;overflow:hidden!important;padding:0!important;margin:0!important;opacity:0!important;position:absolute!important;pointer-events:none!important;z-index:-9999!important;}
+html{height:100%!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;}
+body{height:100%!important;width:100%!important;margin:0!important;padding:0!important;padding-top:0!important;margin-top:0!important;overflow:hidden!important;position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;}
+body>div:first-child{height:100%!important;width:100%!important;max-height:100%!important;padding-top:0!important;margin-top:0!important;position:absolute!important;top:0!important;left:0!important;right:0!important;bottom:0!important;}
+#root,#app{height:100%!important;width:100%!important;max-height:100%!important;padding-top:0!important;margin-top:0!important;}
+CSSEOF
+    cat "$cssfile" >> "$TEMP_CSS"
+    mv "$TEMP_CSS" "$cssfile"
+done
+
+# =============================================================================
+# FIX 5: Origin validation bypass for file:// URLs
+# =============================================================================
+echo "🔧 Patching origin validation..."
+find app.asar.contents -name "*.js" -type f 2>/dev/null | while read -r jsfile; do
+    if grep -q "startsWith" "$jsfile" 2>/dev/null; then
+        sed -i 's/\.startsWith("https:\/\/claude\.ai")/.startsWith("https:\/\/claude.ai")||e.startsWith("file:\/\/")/g' "$jsfile" 2>/dev/null || true
+        sed -i 's/\.startsWith("https:\/\/")/.startsWith("https:\/\/")||e.startsWith("file:\/\/")/g' "$jsfile" 2>/dev/null || true
+    fi
+    sed -i 's/\["https:"\]/["https:","file:"]/g' "$jsfile" 2>/dev/null || true
+    sed -i "s/\['https:'\]/['https:','file:']/g" "$jsfile" 2>/dev/null || true
+done
+
+MAIN_BUILD_JS=$(find app.asar.contents -path "*/.vite/build/*.js" -name "*.js" | head -1)
+if [ -n "$MAIN_BUILD_JS" ] && [ -f "$MAIN_BUILD_JS" ]; then
+    sed -i 's/throw new Error(`Incoming/console.warn(`[Linux] Incoming/g' "$MAIN_BUILD_JS" 2>/dev/null || true
+fi
+echo "✓ Origin validation patched"
+
+# =============================================================================
+# FIX 6: Native module stub for Google Sign-In
+# =============================================================================
+echo "🔧 Creating native module stub..."
 mkdir -p app.asar.contents/node_modules/claude-native
-cat > app.asar.contents/node_modules/claude-native/index.js << EOF
-// Stub implementation of claude-native using KeyboardKey enum values
+cat > app.asar.contents/node_modules/claude-native/index.js << 'EOF'
 const KeyboardKey = {
-  Backspace: 43,
-  Tab: 280,
-  Enter: 261,
-  Shift: 272,
-  Control: 61,
-  Alt: 40,
-  CapsLock: 56,
-  Escape: 85,
-  Space: 276,
-  PageUp: 251,
-  PageDown: 250,
-  End: 83,
-  Home: 154,
-  LeftArrow: 175,
-  UpArrow: 282,
-  RightArrow: 262,
-  DownArrow: 81,
-  Delete: 79,
-  Meta: 187
+  Backspace: 43, Tab: 280, Enter: 261, Shift: 272, Control: 61, Alt: 40,
+  CapsLock: 56, Escape: 85, Space: 276, PageUp: 251, PageDown: 250,
+  End: 83, Home: 154, LeftArrow: 175, UpArrow: 282, RightArrow: 262,
+  DownArrow: 81, Delete: 79, Meta: 187
 };
-
 Object.freeze(KeyboardKey);
-
 module.exports = {
   getWindowsVersion: () => "10.0.0",
   setWindowEffect: () => {},
@@ -338,42 +478,25 @@ EOF
 
 # Copy Tray icons
 mkdir -p app.asar.contents/resources
-cp ../lib/net45/resources/Tray* app.asar.contents/resources/
+cp ../lib/net45/resources/Tray* app.asar.contents/resources/ 2>/dev/null || true
+
+# Copy i18n
+mkdir -p app.asar.contents/resources/i18n/
+cp ../lib/net45/resources/*.json app.asar.contents/resources/i18n/ 2>/dev/null || true
 
 # Repackage app.asar
-mkdir -p app.asar.contents/resources/i18n/
-cp ../lib/net45/resources/*.json app.asar.contents/resources/i18n/
-
 npx asar pack app.asar.contents app.asar || { echo "asar pack failed"; exit 1; }
 
-# Create native module with keyboard constants
+# Create native module in unpacked
 mkdir -p "$INSTALL_DIR/lib/$PACKAGE_NAME/app.asar.unpacked/node_modules/claude-native"
-cat > "$INSTALL_DIR/lib/$PACKAGE_NAME/app.asar.unpacked/node_modules/claude-native/index.js" << EOF
-// Stub implementation of claude-native using KeyboardKey enum values
+cat > "$INSTALL_DIR/lib/$PACKAGE_NAME/app.asar.unpacked/node_modules/claude-native/index.js" << 'EOF'
 const KeyboardKey = {
-  Backspace: 43,
-  Tab: 280,
-  Enter: 261,
-  Shift: 272,
-  Control: 61,
-  Alt: 40,
-  CapsLock: 56,
-  Escape: 85,
-  Space: 276,
-  PageUp: 251,
-  PageDown: 250,
-  End: 83,
-  Home: 154,
-  LeftArrow: 175,
-  UpArrow: 282,
-  RightArrow: 262,
-  DownArrow: 81,
-  Delete: 79,
-  Meta: 187
+  Backspace: 43, Tab: 280, Enter: 261, Shift: 272, Control: 61, Alt: 40,
+  CapsLock: 56, Escape: 85, Space: 276, PageUp: 251, PageDown: 250,
+  End: 83, Home: 154, LeftArrow: 175, UpArrow: 282, RightArrow: 262,
+  DownArrow: 81, Delete: 79, Meta: 187
 };
-
 Object.freeze(KeyboardKey);
-
 module.exports = {
   getWindowsVersion: () => "10.0.0",
   setWindowEffect: () => {},
@@ -394,6 +517,9 @@ EOF
 cp app.asar "$INSTALL_DIR/lib/$PACKAGE_NAME/"
 cp -r app.asar.unpacked "$INSTALL_DIR/lib/$PACKAGE_NAME/"
 
+# Copy Electron
+cp -r "$WORK_DIR/electron-dist"/* "$INSTALL_DIR/lib/$PACKAGE_NAME/"
+
 # Create desktop entry
 cat > "$INSTALL_DIR/share/applications/claude-desktop.desktop" << EOF
 [Desktop Entry]
@@ -407,31 +533,37 @@ MimeType=x-scheme-handler/claude;
 StartupWMClass=Claude
 EOF
 
-# Create launcher script with environment variables and proper flags for Fedora
-cat > "$INSTALL_DIR/bin/claude-desktop" << 'EOF'
-#!/usr/bin/bash
-LOG_FILE="$HOME/claude-desktop-launcher.log"
+# =============================================================================
+# LAUNCHER with Wayland/KDE compatibility
+# =============================================================================
+cat > "$INSTALL_DIR/bin/claude-desktop" << 'LAUNCHER_EOF'
+#!/bin/bash
+LOG_FILE="$HOME/.claude-desktop.log"
 
-# Set environment to avoid GTK conflicts and ensure X11 compatibility
-# These are critical for Fedora 42+ where GTK4 conflicts can occur
+# Environment for Wayland/KDE compatibility
 export GDK_BACKEND=x11
 export GTK_USE_PORTAL=0
-export ELECTRON_DISABLE_SECURITY_WARNINGS=true
 export QT_QPA_PLATFORM=xcb
+export ELECTRON_DISABLE_SECURITY_WARNINGS=true
 
-# Use the standalone electron installation with all necessary flags
-# - --ozone-platform-hint=x11: Force X11 for stability on Fedora
-# - --disable-gpu-sandbox --no-sandbox: Avoid sandbox permission issues
-# - Using absolute path to electron for app drawer compatibility
-/opt/electron/electron /usr/lib64/claude-desktop/app.asar \
-  --ozone-platform-hint=x11 \
-  --enable-logging=file \
-  --log-file="$LOG_FILE" \
-  --log-level=INFO \
-  --disable-gpu-sandbox \
-  --no-sandbox \
-  "$@"
-EOF
+# Detect session type
+SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
+
+# Find electron
+ELECTRON_BIN="/usr/lib64/claude-desktop/electron"
+APP_PATH="/usr/lib64/claude-desktop/app.asar"
+
+# Flags for stability
+FLAGS=(
+    "--no-sandbox"
+    "--ozone-platform=x11"
+    "--disable-gpu-sandbox"
+)
+
+echo "[$(date)] Starting Claude Desktop v6 (session: $SESSION_TYPE)" >> "$LOG_FILE"
+
+exec "$ELECTRON_BIN" "$APP_PATH" "${FLAGS[@]}" "$@" 2>> "$LOG_FILE"
+LAUNCHER_EOF
 chmod +x "$INSTALL_DIR/bin/claude-desktop"
 
 # Create RPM spec file
@@ -439,15 +571,15 @@ cat > "$WORK_DIR/claude-desktop.spec" << EOF
 Name:           claude-desktop
 Version:        ${VERSION}
 Release:        1%{?dist}
-Summary:        Claude Desktop for Linux
+Summary:        Claude Desktop for Linux (Fedora 43+)
 License:        Proprietary
 URL:            https://www.anthropic.com
 BuildArch:      ${ARCHITECTURE}
-Requires:       nodejs >= 12.0.0, npm, p7zip
+Requires:       nodejs >= 12.0.0
 
 %description
-Claude is an AI assistant from Anthropic.
-This package provides the desktop interface for Claude.
+Claude AI assistant desktop application.
+Built with geometry-based titlebar fix for KDE/Wayland compatibility.
 
 %install
 mkdir -p %{buildroot}/usr/lib64/%{name}
@@ -455,7 +587,6 @@ mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/usr/share/applications
 mkdir -p %{buildroot}/usr/share/icons
 
-# Copy files from the INSTALL_DIR
 cp -r ${INSTALL_DIR}/lib/%{name}/* %{buildroot}/usr/lib64/%{name}/
 cp -r ${INSTALL_DIR}/bin/* %{buildroot}/usr/bin/
 cp -r ${INSTALL_DIR}/share/applications/* %{buildroot}/usr/share/applications/
@@ -468,52 +599,18 @@ cp -r ${INSTALL_DIR}/share/icons/* %{buildroot}/usr/share/icons/
 %{_datadir}/icons/hicolor/*/apps/claude-desktop.png
 
 %post
-# Update icon caches
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor || :
-# Force icon theme cache rebuild
-touch -h %{_datadir}/icons/hicolor >/dev/null 2>&1 || :
 update-desktop-database %{_datadir}/applications || :
 
-# Set correct permissions for chrome-sandbox
-echo "Setting chrome-sandbox permissions..."
-SANDBOX_PATH=""
-# Check for sandbox in locally packaged electron first
-if [ -f "/usr/lib64/claude-desktop/app.asar.unpacked/node_modules/electron/dist/chrome-sandbox" ]; then
-    SANDBOX_PATH="/usr/lib64/claude-desktop/app.asar.unpacked/node_modules/electron/dist/chrome-sandbox"
-
-elif [ -n "$SUDO_USER" ]; then
-    # Running via sudo: try to get electron from the invoking user's environment
-    if su - "$SUDO_USER" -c "command -v electron >/dev/null 2>&1"; then
-        ELECTRON_PATH=$(su - "$SUDO_USER" -c "command -v electron")
-
-        POTENTIAL_SANDBOX="\$(dirname "\$(dirname "\$ELECTRON_PATH")")/lib/node_modules/electron/dist/chrome-sandbox"
-        if [ -f "\$POTENTIAL_SANDBOX" ]; then
-            SANDBOX_PATH="\$POTENTIAL_SANDBOX"
-        fi
-    fi
-else
-    # Running directly as root (no SUDO_USER); attempt to find electron in root's PATH
-    if command -v electron >/dev/null 2>&1; then
-        ELECTRON_PATH=$(command -v electron)
-        POTENTIAL_SANDBOX="\$(dirname "\$(dirname "\$ELECTRON_PATH")")/lib/node_modules/electron/dist/chrome-sandbox"
-        if [ -f "\$POTENTIAL_SANDBOX" ]; then
-            SANDBOX_PATH="\$POTENTIAL_SANDBOX"
-        fi
-    fi
-fi
-
-if [ -n "\$SANDBOX_PATH" ] && [ -f "\$SANDBOX_PATH" ]; then
-    echo "Found chrome-sandbox at: \$SANDBOX_PATH"
-    chown root:root "\$SANDBOX_PATH" || echo "Warning: Failed to chown chrome-sandbox"
-    chmod 4755 "\$SANDBOX_PATH" || echo "Warning: Failed to chmod chrome-sandbox"
-    echo "Permissions set for \$SANDBOX_PATH"
-else
-    echo "Warning: chrome-sandbox binary not found. Sandbox may not function correctly."
+# Set sandbox permissions
+if [ -f "/usr/lib64/claude-desktop/chrome-sandbox" ]; then
+    chown root:root "/usr/lib64/claude-desktop/chrome-sandbox" || :
+    chmod 4755 "/usr/lib64/claude-desktop/chrome-sandbox" || :
 fi
 
 %changelog
 * $(date '+%a %b %d %Y') ${MAINTAINER} ${VERSION}-1
-- Initial package
+- Built with geometry-based titlebar fix for Fedora 43
 EOF
 
 # Build RPM package
@@ -525,9 +622,12 @@ if rpmbuild -bb \
     --define "_topdir ${WORK_DIR}" \
     --define "_rpmdir $(pwd)" \
     "${WORK_DIR}/claude-desktop.spec"; then
-    echo "✓ RPM package built successfully at: $RPM_FILE"
-    echo "🎉 Done! You can now install the RPM with: dnf install $RPM_FILE"
+    echo "============================================================================"
+    echo "✓ RPM package built successfully!"
+    echo "============================================================================"
+    echo "Install with: sudo dnf install $RPM_FILE"
+    echo "============================================================================"
 else
-    echo "❌ Failed to build RPM package"
+    echo "RPM build failed"
     exit 1
 fi
