@@ -39,6 +39,7 @@ Supports the Tray menu! (Screenshot of running on KDE)
 For Fedora-based distributions you can build and install Claude Desktop using the provided build script.
 
 **What's New:**
+
 - **Auto-download latest version** - Script fetches the latest Claude Desktop automatically
 - **Native title bar support** - No more double title bar issue
 - **Fedora 43 Wayland/KDE compatibility** - Automatic environment configuration
