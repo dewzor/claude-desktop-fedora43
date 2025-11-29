@@ -45,63 +45,22 @@ For Fedora-based distributions you can build and install Claude Desktop using th
 ```bash
 sudo dnf install rpm-build
 # Clone this repository
-git clone https://github.com/bsneed/claude-desktop-fedora.git
-cd claude-desktop-fedora
+git clone https://github.com/dewzor/claude-desktop-fedora43.git
+cd claude-desktop-fedora43
 
 # Build the package
+chmod +x build-fedora.sh
 sudo ./build-fedora.sh
 
 # Install the package
-# Check what file was actually created
-ls build/electron-app/$(uname -m)/
-
-# Install using the correct filename (example - your version may differ)
-sudo dnf install build/electron-app/$(uname -m)/claude-desktop-*.rpm
-
-# Download standalone Electron
-# The installed Claude Desktop will have GTK conflicts with your system Electron. Download a clean Electron binary
-cd /tmp
-wget https://github.com/electron/electron/releases/download/v37.0.0/electron-v37.0.0-linux-x64.zip
-
-# Extract into /opt
-sudo unzip electron-v37.0.0-linux-x64.zip -d /opt
-sudo mv /opt/electron-v37.0.0-linux-x64 /opt/electron
-sudo chmod +x /opt/electron/electron
-
-# Fix the Claude Desktop Script The default script will try to use your system Electron. Replace it with one that uses the standalone version:
-
-# Backup the original script
-sudo cp /usr/bin/claude-desktop /usr/bin/claude-desktop.backup
-
-# Create the fixed script
-sudo tee /usr/bin/claude-desktop << 'EOF'
-#!/usr/bin/bash
-LOG_FILE="$HOME/claude-desktop-launcher.log"
-
-# Set environment to avoid GTK conflicts
-export GDK_BACKEND=x11
-export GTK_USE_PORTAL=0
-export ELECTRON_DISABLE_SECURITY_WARNINGS=true
-
-# Use the standalone electron installation
-/opt/electron/electron /usr/lib64/claude-desktop/app.asar --ozone-platform-hint=auto --enable-logging=file --log-file=$LOG_FILE --log-level=INFO --disable-gpu-sandbox --no-sandbox "$@"
-EOF
-
-# Make it executable
-sudo chmod +x /usr/bin/claude-desktop
-
-# Launch Claude Desktop
-claude-desktop
-
-```
-
-Installation video here : https://youtu.be/dvU1yJsyJ5k
+Run the command you get from the build script. Done!
 
 Requirements:
 - Fedora 41 Linux distribution
 - Node.js >= 12.0.0 and npm
 - Root/sudo access for dependency installation
 
+## REST OF README IS OUTDATED
 ## 2. Debian Package (New!)
 
 For Debian users, please refer to [Aaddrick's claude-desktop-debian](https://github.com/aaddrick/claude-desktop-debian) repository.  Their implementation is specifically designed for Debian and provides the original build script that inspired THIS project.
