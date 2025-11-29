@@ -5,6 +5,20 @@
 
 If you run into an issue with this build script, make an issue here. Don't bug Anthropic about it - they already have enough on their plates.
 
+
+# Claude Desktop for Linux (Fedora 43 Fixed Edition)
+
+This is a modified version of the Claude Desktop build script, fixed to work on **Fedora 43**.
+
+** Fixes in this version:**
+- **Fedora 43 Support**: Updated dependencies and build process.
+- **Google Sign-In Fixed**: Implemented a native module stub to allow Google authentication to work.
+- **Layout Fixes**: Fixed window scaling and maximizing glitches.
+- **Menu Bar Removed**: Native window frame enabled, removing the double menu bar.
+
+** Issue remaining **
+- **White menu bar**: Theres still a white menu bar that i for the life of me havent been able to get rid of. Other than that, works great.
+
 # Claude Desktop for Linux
 
 This project was inspired by [k3d3's claude-desktop-linux-flake](https://github.com/k3d3/claude-desktop-linux-flake) and their [Reddit post](https://www.reddit.com/r/ClaudeAI/comments/1hgsmpq/i_successfully_ran_claude_desktop_natively_on/) about running Claude Desktop natively on Linux. Their work provided valuable insights into the application's structure and the native bindings implementation.
