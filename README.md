@@ -51,7 +51,7 @@ cd claude-desktop-fedora43
 # Build the package
 chmod +x build-fedora.sh
 sudo ./build-fedora.sh
-
+```
 # Install the package
 Run the command you get from the build script. Done!
 
@@ -59,7 +59,7 @@ Requirements:
 - Fedora 41 Linux distribution
 - Node.js >= 12.0.0 and npm
 - Root/sudo access for dependency installation
-```
+
 ## REST OF README IS OUTDATED
 ## 2. Debian Package (New!)
 
