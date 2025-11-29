@@ -59,7 +59,7 @@ Requirements:
 - Fedora 41 Linux distribution
 - Node.js >= 12.0.0 and npm
 - Root/sudo access for dependency installation
-
+```
 ## REST OF README IS OUTDATED
 ## 2. Debian Package (New!)
 
