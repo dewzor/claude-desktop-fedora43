@@ -6,7 +6,7 @@
 If you run into an issue with this build script, make an issue here. Don't bug Anthropic about it - they already have enough on their plates.
 
 
-# Claude Desktop for Linux (Fedora 43 Fixed Edition)
+# Claude Desktop for Fedora 43
 
 This is a modified version of the Claude Desktop build script, fixed to work on **Fedora 43**.
 
