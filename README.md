@@ -12,7 +12,7 @@ This is a modified version of the Claude Desktop build script, fixed to work on 
 - **Fedora 43 Support**: Updated dependencies and build process
 - **Google Sign-In Fixed**: Implemented a native module stub to allow Google authentication to work
 - **Layout Fixes**: Fixed window scaling and maximizing glitches
-- **Titlebar Gap Fixed (v7)**: Grid collapse + element removal eliminates the dark gap under native titlebar
+- **Titlebar Gap Fixed (v8)**: Root cause fix - patches titlebar height constants from 36px to 0
 - **Auto-Update**: Script automatically downloads the latest Claude Desktop version
 
 # Claude Desktop for Linux
@@ -38,9 +38,10 @@ Supports the Tray menu! (Screenshot of running on KDE)
 
 For Fedora-based distributions you can build and install Claude Desktop using the provided build script.
 
-**What's New (v7):**
+**What's New (v8):**
 
-- **Titlebar gap eliminated** - Grid collapse + element removal fixes the dark gap
+- **Titlebar gap eliminated (ROOT CAUSE FIX)** - Patches height constants (`?0:36` -> `?0:0`) in the bundled JavaScript
+- **Why v8 works**: Claude Desktop reserves 36px for titlebar via ternary patterns. Patching these to 0 eliminates the gap at source.
 - **Auto-download latest version** - Script fetches the latest Claude Desktop automatically
 - **Native title bar support** - No more double title bar issue
 - **Fedora 43 Wayland/KDE compatibility** - Automatic environment configuration
@@ -130,7 +131,7 @@ The build script (`build-fedora.sh`) handles the entire process:
 4. Processes icons for Linux desktop integration
 5. Unpacks and modifies the app.asar:
    - Replaces the native module with our Linux version
-   - Applies titlebar fixes (native frame, CSS/JS injection)
+   - Applies titlebar fixes (height constant patching, native frame, CSS backup)
    - Updates keyboard key mappings
    - Preserves all other functionality
 6. Creates a proper RPM package with:

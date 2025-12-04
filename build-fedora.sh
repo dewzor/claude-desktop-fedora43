@@ -13,13 +13,14 @@ set -e
 #   - Google Sign-In (native module stub)
 #   - Origin validation bypass (IPC security fix for file:// URLs)
 #   - GPU/Wayland compatibility (software rendering fallback)
-#   - Titlebar gap fix via grid collapse + element removal (v7)
+#   - Titlebar gap fix via height constant patching (v8)
 #
-# v7 Changelog:
-#   - Fixed dark titlebar gap by collapsing CSS grid rows
-#   - Changed from display:none to element.remove() for titlebar
-#   - Added -webkit-app-region:drag detection (survives minification)
-#   - Removed redundant CSS file patching
+# v8 Changelog:
+#   - ROOT CAUSE FIX: Patch titlebar height constants from 36px to 0
+#   - The app reserves 36px via ?0:36 ternary patterns (e.g., oR=hn?0:36)
+#   - sed patches these constants at source, eliminating gap permanently
+#   - Simplified CSS backup with negative margin approach
+#   - Removed complex DOM manipulation (no longer needed)
 # =============================================================================
 
 # Use redirect URL for always-latest version
@@ -61,7 +62,7 @@ if [ "$ORIGINAL_USER" != "root" ] && [ -d "$ORIGINAL_HOME/.nvm" ]; then
 fi
 
 echo "============================================================================"
-echo "Claude Desktop for Fedora - Build Script v7"
+echo "Claude Desktop for Fedora - Build Script v8"
 echo "============================================================================"
 echo "Distribution: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
 echo "============================================================================"
@@ -227,16 +228,37 @@ find app.asar.contents -name "*.js" -type f 2>/dev/null | while read -r jsfile; 
 done
 
 # =============================================================================
-# FIX 3: Inject Linux fixes (v7 - grid collapse + element removal)
+# FIX 2.5: Patch titlebar height constants (v8 - ROOT CAUSE FIX)
+# The app reserves 36px for titlebar via ternary patterns like:
+#   - Main process: oR=hn?0:36 (36px on Linux, 0 on macOS)
+#   - Renderer: k1=Yu?0:36, C1=Yu?28:36
+# Patching ?0:36 to ?0:0 eliminates the space reservation entirely.
 # =============================================================================
-echo "🔧 Injecting Linux-specific fixes (v7 - grid collapse + element removal)..."
+echo "🔧 Patching titlebar height constants (v8 root cause fix)..."
+PATCHED_COUNT=0
+find app.asar.contents -name "*.js" -type f 2>/dev/null | while read -r jsfile; do
+    # Pattern 1: ?0:36 -> ?0:0 (main titlebar height on Linux)
+    if grep -q '?0:36' "$jsfile" 2>/dev/null; then
+        sed -i 's/?0:36/?0:0/g' "$jsfile" 2>/dev/null && echo "  Patched ?0:36 in $(basename "$jsfile")"
+    fi
+    # Pattern 2: ?28:36 -> ?28:0 (secondary height pattern)
+    if grep -q '?28:36' "$jsfile" 2>/dev/null; then
+        sed -i 's/?28:36/?28:0/g' "$jsfile" 2>/dev/null && echo "  Patched ?28:36 in $(basename "$jsfile")"
+    fi
+done
+echo "✓ Titlebar height constants patched to 0"
+
+# =============================================================================
+# FIX 3: Inject Linux fixes (v8 - simplified CSS + minimal JS)
+# =============================================================================
+echo "🔧 Injecting Linux-specific fixes (v8 - simplified with height constants already patched)..."
 MAIN_ENTRY=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' app.asar.contents/package.json 2>/dev/null | sed 's/"main"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/' || true)
 if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
     TEMP_FILE=$(mktemp)
     cat > "$TEMP_FILE" << 'INJECT_EOF'
 // =============================================================================
-// Linux Fixes - Injected by build script v7
-// Strategy: Grid collapse + element removal (not just hiding)
+// Linux Fixes - Injected by build script v8
+// Strategy: Height constants patched to 0 at source + CSS backup + menu removal
 // =============================================================================
 (function() {
     if (process.platform !== 'linux') return;
@@ -257,7 +279,7 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
         win.setMenuBarVisibility(false);
         win.setAutoHideMenuBar(false);
 
-        // Force relayout on window state changes
+        // Force relayout on window state changes (backup for edge cases)
         const forceRelayout = () => {
             if (!win || win.isDestroyed()) return;
             try {
@@ -275,145 +297,41 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
         win.on('leave-full-screen', () => setTimeout(forceRelayout, 100));
 
         win.webContents.on('did-finish-load', () => {
-            // Layer 1: CSS to collapse grid rows and reset spacing
+            // v8: Simplified CSS - main fix is height constants patched to 0
+            // This CSS is backup in case any residual gap remains
             win.webContents.insertCSS(`
-                /* v7: Universal spacing reset */
-                html, body, #root, #app, body > div:first-child {
-                    padding-top: 0 !important;
-                    margin-top: 0 !important;
-                    height: 100% !important;
-                    width: 100% !important;
-                }
-                body {
-                    position: fixed !important;
-                    top: 0 !important;
-                    left: 0 !important;
-                    right: 0 !important;
-                    bottom: 0 !important;
+                /* v8: Reset any residual spacing */
+                html, body {
+                    margin: 0 !important;
+                    padding: 0 !important;
                     overflow: hidden !important;
                 }
-                /* v7: Collapse grid rows - target containers that use grid layout */
+                /* v8: Pull content up by 36px to cover any residual gap */
                 body > div:first-child {
-                    display: grid !important;
+                    margin-top: -36px !important;
+                    padding-top: 0 !important;
+                    height: calc(100% + 36px) !important;
+                }
+                /* v8: Alternative - collapse first row if grid layout */
+                body > div:first-child {
                     grid-template-rows: 0 1fr !important;
                 }
-                /* v7: Hide first child (titlebar row) */
                 body > div:first-child > div:first-child {
                     display: none !important;
                     height: 0 !important;
-                    max-height: 0 !important;
-                    overflow: hidden !important;
                 }
-                /* Fallback selectors for titlebar elements */
-                [class*="titlebar" i], [class*="title-bar" i], [class*="drag-region" i],
-                [class*="window-controls" i], [style*="-webkit-app-region: drag"],
-                [style*="-webkit-app-region:drag"], [data-tauri-drag-region] {
+                /* v8: Hide drag-region elements */
+                [style*="-webkit-app-region: drag"]:not(body):not(html),
+                [style*="-webkit-app-region:drag"]:not(body):not(html),
+                .nc-drag:not(body):not(html) {
                     display: none !important;
                     height: 0 !important;
-                    visibility: hidden !important;
                 }
             `).catch(() => {});
 
-            // Layer 2: JavaScript to REMOVE titlebar elements (not just hide)
+            // v8: Minimal JS - just log for debugging, main fix is in constants
             win.webContents.executeJavaScript(`
-                (function() {
-                    'use strict';
-                    const LOG = '[LinuxFix v7]';
-
-                    // Check if element is likely a titlebar
-                    const isTitlebar = (el) => {
-                        if (!el || el.nodeType !== 1) return false;
-
-                        // Method 1: Check -webkit-app-region (most reliable)
-                        try {
-                            const style = window.getComputedStyle(el);
-                            if (style.getPropertyValue('-webkit-app-region') === 'drag') {
-                                console.log(LOG, 'Found titlebar by -webkit-app-region:', el);
-                                return true;
-                            }
-                        } catch(e) {}
-
-                        // Method 2: Check class/id names
-                        const className = (el.className?.toString?.() || '').toLowerCase();
-                        const id = (el.id || '').toLowerCase();
-                        if (className.includes('titlebar') || className.includes('title-bar') ||
-                            className.includes('drag-region') || className.includes('window-control') ||
-                            id.includes('titlebar') || id.includes('title-bar')) {
-                            console.log(LOG, 'Found titlebar by class/id:', el);
-                            return true;
-                        }
-
-                        // Method 3: Geometry check (element at top, bar-shaped)
-                        try {
-                            const rect = el.getBoundingClientRect();
-                            if (rect.top >= 0 && rect.top < 10 &&
-                                rect.height > 10 && rect.height <= 55 &&
-                                rect.width >= window.innerWidth * 0.8) {
-                                // Safety: skip if has significant content
-                                const hasInputs = el.querySelector('input, textarea, [contenteditable]');
-                                const textLen = (el.textContent || '').replace(/\\s+/g, '').length;
-                                if (!hasInputs && textLen < 50) {
-                                    console.log(LOG, 'Found titlebar by geometry:', el);
-                                    return true;
-                                }
-                            }
-                        } catch(e) {}
-
-                        return false;
-                    };
-
-                    // Remove element from DOM completely
-                    const removeElement = (el) => {
-                        if (el && el.isConnected) {
-                            console.log(LOG, 'Removing element:', el.tagName, el.className);
-                            el.remove();
-                        }
-                    };
-
-                    // Scan and remove titlebars
-                    const scanAndRemove = () => {
-                        // Check direct children of body
-                        const bodyChildren = Array.from(document.body.children);
-                        for (const child of bodyChildren) {
-                            if (isTitlebar(child)) {
-                                removeElement(child);
-                                continue;
-                            }
-                            // Check grandchildren (first level inside root container)
-                            const grandchildren = Array.from(child.children || []);
-                            for (const gc of grandchildren) {
-                                if (isTitlebar(gc)) {
-                                    removeElement(gc);
-                                }
-                            }
-                        }
-                    };
-
-                    // MutationObserver to catch dynamically added titlebars
-                    const observer = new MutationObserver((mutations) => {
-                        for (const m of mutations) {
-                            for (const node of m.addedNodes) {
-                                if (node.nodeType === 1) {
-                                    if (isTitlebar(node)) {
-                                        removeElement(node);
-                                    } else if (node.querySelector) {
-                                        node.querySelectorAll('*').forEach(child => {
-                                            if (isTitlebar(child)) removeElement(child);
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    });
-
-                    observer.observe(document.body, { childList: true, subtree: true });
-
-                    // Run scans at different timings to catch React renders
-                    scanAndRemove();
-                    setTimeout(scanAndRemove, 100);
-                    setTimeout(scanAndRemove, 500);
-                    setTimeout(scanAndRemove, 1500);
-                })();
+                console.log('[LinuxFix v8] Height constants patched to 0, CSS backup applied');
             `).catch(() => {});
         });
     });
@@ -428,26 +346,26 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
 INJECT_EOF
     cat "app.asar.contents/$MAIN_ENTRY" >> "$TEMP_FILE"
     mv "$TEMP_FILE" "app.asar.contents/$MAIN_ENTRY"
-    echo "✓ Linux fixes injected (v7)"
+    echo "✓ Linux fixes injected (v8)"
 fi
 
 # =============================================================================
-# FIX 4: CSS file patching (minimal - main fixes handled by JS injection)
+# FIX 4: CSS file patching (minimal backup - main fix is height constants)
 # =============================================================================
-echo "🔧 Patching CSS files (minimal v7)..."
-# Only add essential grid collapse CSS to stylesheets as backup
+echo "🔧 Patching CSS files (v8 backup)..."
+# Add backup CSS with negative margin approach
 find app.asar.contents -name "*.css" -type f 2>/dev/null | head -3 | while read -r cssfile; do
     TEMP_CSS=$(mktemp)
     cat > "$TEMP_CSS" << 'CSSEOF'
-/* Linux v7: Grid collapse + titlebar removal */
-body>div:first-child{display:grid!important;grid-template-rows:0 1fr!important;}
+/* Linux v8: Backup CSS - main fix is height constants patched to 0 */
+body>div:first-child{margin-top:-36px!important;height:calc(100% + 36px)!important;}
 body>div:first-child>div:first-child{display:none!important;height:0!important;}
-[class*="titlebar" i],[class*="drag-region" i]{display:none!important;height:0!important;}
+.nc-drag:not(body){display:none!important;height:0!important;}
 CSSEOF
     cat "$cssfile" >> "$TEMP_CSS"
     mv "$TEMP_CSS" "$cssfile"
 done
-echo "✓ CSS patched (v7)"
+echo "✓ CSS patched (v8)"
 
 # =============================================================================
 # FIX 5: Origin validation bypass for file:// URLs
@@ -581,7 +499,7 @@ FLAGS=(
     "--disable-gpu-sandbox"
 )
 
-echo "[$(date)] Starting Claude Desktop v7 (session: $SESSION_TYPE)" >> "$LOG_FILE"
+echo "[$(date)] Starting Claude Desktop v8 (session: $SESSION_TYPE)" >> "$LOG_FILE"
 
 exec "$ELECTRON_BIN" "$APP_PATH" "${FLAGS[@]}" "$@" 2>> "$LOG_FILE"
 LAUNCHER_EOF
@@ -600,7 +518,7 @@ Requires:       nodejs >= 12.0.0
 
 %description
 Claude AI assistant desktop application.
-Built with v7 grid-collapse titlebar fix for KDE/Wayland compatibility.
+Built with v8 titlebar height constant patch for KDE/Wayland compatibility.
 
 %install
 mkdir -p %{buildroot}/usr/lib64/%{name}
@@ -631,7 +549,7 @@ fi
 
 %changelog
 * $(date '+%a %b %d %Y') ${MAINTAINER} ${VERSION}-1
-- v7: Grid collapse + element removal titlebar fix for Fedora 43
+- v8: Titlebar height constant patch (root cause fix) for Fedora 43
 EOF
 
 # Build RPM package
