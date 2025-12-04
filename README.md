@@ -12,7 +12,7 @@ This is a modified version of the Claude Desktop build script, fixed to work on 
 - **Fedora 43 Support**: Updated dependencies and build process
 - **Google Sign-In Fixed**: Implemented a native module stub to allow Google authentication to work
 - **Layout Fixes**: Fixed window scaling and maximizing glitches
-- **Double Title Bar Fixed**: Native window frame enabled with comprehensive JS/CSS injection
+- **Titlebar Gap Fixed (v7)**: Grid collapse + element removal eliminates the dark gap under native titlebar
 - **Auto-Update**: Script automatically downloads the latest Claude Desktop version
 
 # Claude Desktop for Linux
@@ -38,12 +38,12 @@ Supports the Tray menu! (Screenshot of running on KDE)
 
 For Fedora-based distributions you can build and install Claude Desktop using the provided build script.
 
-**What's New:**
+**What's New (v7):**
 
+- **Titlebar gap eliminated** - Grid collapse + element removal fixes the dark gap
 - **Auto-download latest version** - Script fetches the latest Claude Desktop automatically
 - **Native title bar support** - No more double title bar issue
 - **Fedora 43 Wayland/KDE compatibility** - Automatic environment configuration
-- **Improved launcher** - Proper X11/GTK settings out of the box
 
 ```bash
 # Install build dependencies

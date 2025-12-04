@@ -13,13 +13,13 @@ set -e
 #   - Google Sign-In (native module stub)
 #   - Origin validation bypass (IPC security fix for file:// URLs)
 #   - GPU/Wayland compatibility (software rendering fallback)
-#   - White bar fix via geometry-based detection (future-proof)
+#   - Titlebar gap fix via grid collapse + element removal (v7)
 #
-# v6 Changelog:
-#   - Auto-download latest Claude Desktop version
-#   - Removed fragile minified variable sed patches
-#   - Promoted JS injection as primary titlebar fix
-#   - Added Cloudflare bypass headers for download
+# v7 Changelog:
+#   - Fixed dark titlebar gap by collapsing CSS grid rows
+#   - Changed from display:none to element.remove() for titlebar
+#   - Added -webkit-app-region:drag detection (survives minification)
+#   - Removed redundant CSS file patching
 # =============================================================================
 
 # Use redirect URL for always-latest version
@@ -61,7 +61,7 @@ if [ "$ORIGINAL_USER" != "root" ] && [ -d "$ORIGINAL_HOME/.nvm" ]; then
 fi
 
 echo "============================================================================"
-echo "Claude Desktop for Fedora - Build Script v6"
+echo "Claude Desktop for Fedora - Build Script v7"
 echo "============================================================================"
 echo "Distribution: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
 echo "============================================================================"
@@ -227,26 +227,26 @@ find app.asar.contents -name "*.js" -type f 2>/dev/null | while read -r jsfile; 
 done
 
 # =============================================================================
-# FIX 3: Inject comprehensive Linux fixes (PRIMARY - geometry-based detection)
+# FIX 3: Inject Linux fixes (v7 - grid collapse + element removal)
 # =============================================================================
-echo "🔧 Injecting Linux-specific fixes (geometry-based detection)..."
+echo "🔧 Injecting Linux-specific fixes (v7 - grid collapse + element removal)..."
 MAIN_ENTRY=$(grep -o '"main"[[:space:]]*:[[:space:]]*"[^"]*"' app.asar.contents/package.json 2>/dev/null | sed 's/"main"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/' || true)
 if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
     TEMP_FILE=$(mktemp)
     cat > "$TEMP_FILE" << 'INJECT_EOF'
 // =============================================================================
-// Linux Fixes - Injected by build script v6
-// Uses geometry-based detection (survives minification changes)
+// Linux Fixes - Injected by build script v7
+// Strategy: Grid collapse + element removal (not just hiding)
 // =============================================================================
 (function() {
     if (process.platform !== 'linux') return;
 
     const { app, Menu, BrowserWindow } = require('electron');
 
+    // Remove application menu
     const removeMenu = () => {
         try { Menu.setApplicationMenu(null); } catch(e) {}
     };
-
     removeMenu();
     app.on('ready', removeMenu);
 
@@ -257,21 +257,14 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
         win.setMenuBarVisibility(false);
         win.setAutoHideMenuBar(false);
 
+        // Force relayout on window state changes
         const forceRelayout = () => {
             if (!win || win.isDestroyed()) return;
             try {
                 const [width, height] = win.getSize();
                 win.setSize(width, height + 1);
                 setTimeout(() => {
-                    if (win && !win.isDestroyed()) {
-                        win.setSize(width, height);
-                        win.webContents.executeJavaScript(`
-                            window.dispatchEvent(new Event('resize'));
-                            document.body.style.display = 'none';
-                            document.body.offsetHeight;
-                            document.body.style.display = '';
-                        `).catch(() => {});
-                    }
+                    if (win && !win.isDestroyed()) win.setSize(width, height);
                 }, 50);
             } catch(e) {}
         };
@@ -282,32 +275,14 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
         win.on('leave-full-screen', () => setTimeout(forceRelayout, 100));
 
         win.webContents.on('did-finish-load', () => {
+            // Layer 1: CSS to collapse grid rows and reset spacing
             win.webContents.insertCSS(`
-                [class*="titlebar" i],[class*="Titlebar" i],[class*="title-bar" i],[class*="TitleBar" i],
-                [id*="titlebar" i],[id*="title-bar" i],[class*="drag-region" i],[class*="dragRegion" i],
-                [class*="window-controls" i],[class*="windowControls" i],[style*="-webkit-app-region: drag"],
-                [style*="-webkit-app-region:drag"],[data-tauri-drag-region] {
-                    display: none !important;
-                    visibility: hidden !important;
-                    height: 0 !important;
-                    max-height: 0 !important;
-                    min-height: 0 !important;
-                    padding: 0 !important;
-                    margin: 0 !important;
-                    overflow: hidden !important;
-                    opacity: 0 !important;
-                    pointer-events: none !important;
-                    position: absolute !important;
-                    z-index: -9999 !important;
-                }
-                html, body {
-                    height: 100% !important;
-                    width: 100% !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
+                /* v7: Universal spacing reset */
+                html, body, #root, #app, body > div:first-child {
                     padding-top: 0 !important;
                     margin-top: 0 !important;
-                    overflow: hidden !important;
+                    height: 100% !important;
+                    width: 100% !important;
                 }
                 body {
                     position: fixed !important;
@@ -315,91 +290,135 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
                     left: 0 !important;
                     right: 0 !important;
                     bottom: 0 !important;
+                    overflow: hidden !important;
                 }
-                body > div:first-child, #root, #app {
-                    height: 100% !important;
-                    width: 100% !important;
-                    max-height: 100% !important;
-                    padding-top: 0 !important;
-                    margin-top: 0 !important;
+                /* v7: Collapse grid rows - target containers that use grid layout */
+                body > div:first-child {
+                    display: grid !important;
+                    grid-template-rows: 0 1fr !important;
+                }
+                /* v7: Hide first child (titlebar row) */
+                body > div:first-child > div:first-child {
+                    display: none !important;
+                    height: 0 !important;
+                    max-height: 0 !important;
+                    overflow: hidden !important;
+                }
+                /* Fallback selectors for titlebar elements */
+                [class*="titlebar" i], [class*="title-bar" i], [class*="drag-region" i],
+                [class*="window-controls" i], [style*="-webkit-app-region: drag"],
+                [style*="-webkit-app-region:drag"], [data-tauri-drag-region] {
+                    display: none !important;
+                    height: 0 !important;
+                    visibility: hidden !important;
                 }
             `).catch(() => {});
 
+            // Layer 2: JavaScript to REMOVE titlebar elements (not just hide)
             win.webContents.executeJavaScript(`
-                (function removeWhiteBar() {
-                    const removeTopBars = () => {
-                        const children = Array.from(document.body.children);
-                        for (const child of children) {
-                            const rect = child.getBoundingClientRect();
-                            if (rect.top < 5 && rect.height > 0 && rect.height <= 50 &&
-                                rect.width > window.innerWidth * 0.8) {
-                                const hasTextContent = child.textContent?.trim().length > 100;
-                                const hasInputs = child.querySelectorAll('input, textarea, button').length > 3;
-                                if (!hasTextContent && !hasInputs) {
-                                    child.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
+                (function() {
+                    'use strict';
+                    const LOG = '[LinuxFix v7]';
+
+                    // Check if element is likely a titlebar
+                    const isTitlebar = (el) => {
+                        if (!el || el.nodeType !== 1) return false;
+
+                        // Method 1: Check -webkit-app-region (most reliable)
+                        try {
+                            const style = window.getComputedStyle(el);
+                            if (style.getPropertyValue('-webkit-app-region') === 'drag') {
+                                console.log(LOG, 'Found titlebar by -webkit-app-region:', el);
+                                return true;
+                            }
+                        } catch(e) {}
+
+                        // Method 2: Check class/id names
+                        const className = (el.className?.toString?.() || '').toLowerCase();
+                        const id = (el.id || '').toLowerCase();
+                        if (className.includes('titlebar') || className.includes('title-bar') ||
+                            className.includes('drag-region') || className.includes('window-control') ||
+                            id.includes('titlebar') || id.includes('title-bar')) {
+                            console.log(LOG, 'Found titlebar by class/id:', el);
+                            return true;
+                        }
+
+                        // Method 3: Geometry check (element at top, bar-shaped)
+                        try {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.top >= 0 && rect.top < 10 &&
+                                rect.height > 10 && rect.height <= 55 &&
+                                rect.width >= window.innerWidth * 0.8) {
+                                // Safety: skip if has significant content
+                                const hasInputs = el.querySelector('input, textarea, [contenteditable]');
+                                const textLen = (el.textContent || '').replace(/\\s+/g, '').length;
+                                if (!hasInputs && textLen < 50) {
+                                    console.log(LOG, 'Found titlebar by geometry:', el);
+                                    return true;
                                 }
                             }
+                        } catch(e) {}
+
+                        return false;
+                    };
+
+                    // Remove element from DOM completely
+                    const removeElement = (el) => {
+                        if (el && el.isConnected) {
+                            console.log(LOG, 'Removing element:', el.tagName, el.className);
+                            el.remove();
                         }
-                        const firstChild = document.body.firstElementChild;
-                        if (firstChild) {
-                            const grandchildren = Array.from(firstChild.children);
+                    };
+
+                    // Scan and remove titlebars
+                    const scanAndRemove = () => {
+                        // Check direct children of body
+                        const bodyChildren = Array.from(document.body.children);
+                        for (const child of bodyChildren) {
+                            if (isTitlebar(child)) {
+                                removeElement(child);
+                                continue;
+                            }
+                            // Check grandchildren (first level inside root container)
+                            const grandchildren = Array.from(child.children || []);
                             for (const gc of grandchildren) {
-                                const rect = gc.getBoundingClientRect();
-                                if (rect.top < 5 && rect.height > 0 && rect.height <= 50 &&
-                                    rect.width > window.innerWidth * 0.8) {
-                                    const hasTextContent = gc.textContent?.trim().length > 100;
-                                    const hasInputs = gc.querySelectorAll('input, textarea, button').length > 3;
-                                    if (!hasTextContent && !hasInputs) {
-                                        gc.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
-                                    }
+                                if (isTitlebar(gc)) {
+                                    removeElement(gc);
                                 }
                             }
                         }
                     };
-                    removeTopBars();
-                    setTimeout(removeTopBars, 100);
-                    setTimeout(removeTopBars, 500);
-                    setTimeout(removeTopBars, 1000);
 
+                    // MutationObserver to catch dynamically added titlebars
                     const observer = new MutationObserver((mutations) => {
-                        let shouldCheck = false;
                         for (const m of mutations) {
-                            if (m.addedNodes.length > 0) {
-                                shouldCheck = true;
-                                m.addedNodes.forEach(node => {
-                                    if (node.nodeType === 1) {
-                                        const className = (node.className?.toString?.() || '').toLowerCase();
-                                        const id = (node.id || '').toLowerCase();
-                                        if (className.includes('titlebar') || className.includes('drag') ||
-                                            id.includes('titlebar') || id.includes('drag')) {
-                                            node.style.cssText = 'display:none!important;height:0!important;visibility:hidden!important;';
-                                        }
+                            for (const node of m.addedNodes) {
+                                if (node.nodeType === 1) {
+                                    if (isTitlebar(node)) {
+                                        removeElement(node);
+                                    } else if (node.querySelector) {
+                                        node.querySelectorAll('*').forEach(child => {
+                                            if (isTitlebar(child)) removeElement(child);
+                                        });
                                     }
-                                });
+                                }
                             }
                         }
-                        if (shouldCheck) setTimeout(removeTopBars, 10);
                     });
+
                     observer.observe(document.body, { childList: true, subtree: true });
 
-                    document.body.style.paddingTop = '0';
-                    document.body.style.marginTop = '0';
-                    if (document.body.firstElementChild) {
-                        document.body.firstElementChild.style.paddingTop = '0';
-                        document.body.firstElementChild.style.marginTop = '0';
-                    }
+                    // Run scans at different timings to catch React renders
+                    scanAndRemove();
+                    setTimeout(scanAndRemove, 100);
+                    setTimeout(scanAndRemove, 500);
+                    setTimeout(scanAndRemove, 1500);
                 })();
-            `).catch(() => {});
-        });
-
-        win.webContents.on('dom-ready', () => {
-            win.webContents.insertCSS(`
-                [class*="titlebar" i],[class*="drag-region" i],[class*="window-controls" i]{display:none!important;height:0!important;}
-                body{padding-top:0!important;margin-top:0!important;}
             `).catch(() => {});
         });
     });
 
+    // Intercept menu creation
     const originalSetMenu = Menu.setApplicationMenu;
     Menu.setApplicationMenu = function(menu) {
         return originalSetMenu.call(this, null);
@@ -409,26 +428,26 @@ if [ -n "$MAIN_ENTRY" ] && [ -f "app.asar.contents/$MAIN_ENTRY" ]; then
 INJECT_EOF
     cat "app.asar.contents/$MAIN_ENTRY" >> "$TEMP_FILE"
     mv "$TEMP_FILE" "app.asar.contents/$MAIN_ENTRY"
-    echo "✓ Linux fixes injected"
+    echo "✓ Linux fixes injected (v7)"
 fi
 
 # =============================================================================
-# FIX 4: Patch CSS files
+# FIX 4: CSS file patching (minimal - main fixes handled by JS injection)
 # =============================================================================
-echo "🔧 Patching CSS files..."
-find app.asar.contents -name "*.css" -type f 2>/dev/null | while read -r cssfile; do
+echo "🔧 Patching CSS files (minimal v7)..."
+# Only add essential grid collapse CSS to stylesheets as backup
+find app.asar.contents -name "*.css" -type f 2>/dev/null | head -3 | while read -r cssfile; do
     TEMP_CSS=$(mktemp)
     cat > "$TEMP_CSS" << 'CSSEOF'
-/* Linux: Remove titlebar elements - v6 */
-[class*="titlebar" i],[class*="Titlebar" i],[class*="title-bar" i],[class*="TitleBar" i],[id*="titlebar" i],[class*="drag-region" i],[class*="window-controls" i],[style*="-webkit-app-region"]{display:none!important;height:0!important;max-height:0!important;visibility:hidden!important;overflow:hidden!important;padding:0!important;margin:0!important;opacity:0!important;position:absolute!important;pointer-events:none!important;z-index:-9999!important;}
-html{height:100%!important;width:100%!important;margin:0!important;padding:0!important;overflow:hidden!important;}
-body{height:100%!important;width:100%!important;margin:0!important;padding:0!important;padding-top:0!important;margin-top:0!important;overflow:hidden!important;position:fixed!important;top:0!important;left:0!important;right:0!important;bottom:0!important;}
-body>div:first-child{height:100%!important;width:100%!important;max-height:100%!important;padding-top:0!important;margin-top:0!important;position:absolute!important;top:0!important;left:0!important;right:0!important;bottom:0!important;}
-#root,#app{height:100%!important;width:100%!important;max-height:100%!important;padding-top:0!important;margin-top:0!important;}
+/* Linux v7: Grid collapse + titlebar removal */
+body>div:first-child{display:grid!important;grid-template-rows:0 1fr!important;}
+body>div:first-child>div:first-child{display:none!important;height:0!important;}
+[class*="titlebar" i],[class*="drag-region" i]{display:none!important;height:0!important;}
 CSSEOF
     cat "$cssfile" >> "$TEMP_CSS"
     mv "$TEMP_CSS" "$cssfile"
 done
+echo "✓ CSS patched (v7)"
 
 # =============================================================================
 # FIX 5: Origin validation bypass for file:// URLs
@@ -562,7 +581,7 @@ FLAGS=(
     "--disable-gpu-sandbox"
 )
 
-echo "[$(date)] Starting Claude Desktop v6 (session: $SESSION_TYPE)" >> "$LOG_FILE"
+echo "[$(date)] Starting Claude Desktop v7 (session: $SESSION_TYPE)" >> "$LOG_FILE"
 
 exec "$ELECTRON_BIN" "$APP_PATH" "${FLAGS[@]}" "$@" 2>> "$LOG_FILE"
 LAUNCHER_EOF
@@ -581,7 +600,7 @@ Requires:       nodejs >= 12.0.0
 
 %description
 Claude AI assistant desktop application.
-Built with geometry-based titlebar fix for KDE/Wayland compatibility.
+Built with v7 grid-collapse titlebar fix for KDE/Wayland compatibility.
 
 %install
 mkdir -p %{buildroot}/usr/lib64/%{name}
@@ -612,7 +631,7 @@ fi
 
 %changelog
 * $(date '+%a %b %d %Y') ${MAINTAINER} ${VERSION}-1
-- Built with geometry-based titlebar fix for Fedora 43
+- v7: Grid collapse + element removal titlebar fix for Fedora 43
 EOF
 
 # Build RPM package
